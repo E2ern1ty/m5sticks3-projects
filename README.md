@@ -1,100 +1,50 @@
-# WiFi Signal Hunter 📡
+# M5StickS3 Projects 🛠️
 
-**A WiFi signal-strength tracker for the M5StickS3 — find where your AP really is, by sight and by sound.**
-为 M5StickS3 打造的 WiFi 信号寻踪器——用眼睛看、用耳朵听，找到信号源的真实位置。
+**A collection of pocket tools for the M5StickS3 (ESP32-S3).**
+为 M5StickS3 打造的口袋工具合集——刷上即用的三个小应用。
 
-| 列表页 List View | 追踪页 Track View |
-|:---:|:---:|
-| ![List View](docs/img/list-view.svg) | ![Track View](docs/img/track-view.svg) |
-| 扫描列表：稳定顺序 / 信号格 / 信道 / dBm / 电量 | 锁定信号源：4Hz 实时读数 / 历史曲线 / 盖革式蜂鸣 |
-
-> 上图为 UI 模拟示意图（依固件实际布局绘制）。
-
-## 它能做什么
-
-拿着这台小棒子在家里走一圈：
-
-- **列表页**：循环扫描周边 WiFi（~2.5s 一轮），首扫按信号排序后**顺序固定**，
-  新信号源追加、消失 3 轮移除；标题栏显示扫描状态与实时电量；长按 A 过滤隐藏网络
-- **追踪页**：按 BSSID 锁定任一信号源，**单信道快扫每秒刷新 4~5 次**——
-  大字号 dBm、彩色信号条、历史曲线，以及盖革计数器式蜂鸣：
-  **离信号源越近响得越急**，揣在兜里也能凭声音摸到 AP 位置
-- **重力翻转**：BMI270 检测横屏方向，倒拿 180° 屏幕自动转
-- 防丢机制：追踪中每 15s 全扫校准；AP 换信道或连续丢失自动重找
-
-设备：M5Stack M5StickS3（SKU K150，ESP32-S3-PICO-1-N8R8，BMI270 IMU、
-ES8311 音频、红外收发、1.14" 240×135 LCD、蜂鸣喇叭、250mAh 电池）。
-同类 ESP32-S3 + LCD + 按键的设备稍改引脚也能跑。
-
-| 按键 | 列表页 | 追踪页 |
+| 应用 | 一句话 | 截图/说明 |
 |---|---|---|
-| BtnA（正面大键）短按 | 下移选择（可滚动） | 立即全扫 |
-| BtnA 长按 0.6s | 显示/隐藏隐藏 SSID 信号源 | — |
-| BtnB（侧键） | 进入追踪 | 返回列表 |
+| 📡 [WiFi Signal Hunter](wifi_scanner/) | 信号寻踪器：扫描排序、实时追踪、盖革蜂鸣、3D 方位罗盘 | [![List View](docs/img/list-view.svg)](wifi_scanner/) |
+| 🗣️ [Pocket Translator](translator/) | 翻译器：按住说话，边说边出字，英文/日文译文+朗读 | 见 [translator](translator/) |
+| 🫧 [Bubble Level](level/) | 水平仪：气泡/数字角度/校零，检查桌子平不平 | 见 [level](level/) |
 
-## 直接烧录（免编译）
+硬件：M5Stack M5StickS3（K150，ESP32-S3-PICO-1-N8R8 + BMI270 + ES8311 + 红外 + 240×135 LCD）。
+同类 ESP32-S3 + M5Unified 设备稍改引脚可跑。所有项目基于 Arduino + M5Unified
+（板级自动识别），MIT License。
 
-到 [Releases](https://github.com/E2ern1ty/wifi-signal-hunter/releases) 下载
-`wifi-signal-hunter-vX.Y.Z-flashable.zip`，解压后：
+## 📥 免编译烧录
+
+到 [Releases](https://github.com/E2ern1ty/m5sticks3-projects/releases) 下载对应应用的
+`*-flashable.zip`，解压后：
 
 ```bash
-# 安装 esptool（任选其一）
-pip install esptool          # 或 brew install esptool
-
-# 一条命令烧录（按实际串口改 /dev/cu.usbmodemXXXX）
-esptool --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 921600 \
-  write_flash 0x0 full-image-vX.Y.Z.bin
+pip install esptool   # 或 brew install esptool
+esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
+  write_flash 0x0 full-image-*.bin
 ```
 
-烧完**拔插一次 USB** 即开机运行（ESP32-S3 的 USB 下载模式需断电退出）。
-M5StickS3 出厂固件可用本仓库 `restore_stock.sh` 还原（需自备份镜像）。
+烧完**拔插一次 USB** 即开机（ESP32-S3 USB 下载模式需断电退出）。
+> ⚠️ 翻译器的免编译包只含占位密钥，联网使用需按 [translator/README](translator/) 配置密钥后源码构建。
 
-## translator — 手持翻译器
-
-**按住 A 说话（中文），松开即得英文/日文译文并朗读。**
-
-```
-按住 A ─► 讯飞 iat 流式听写（音频边录边推流，文字边说边上屏）
-松开   ─► 硅基流动 Qwen2.5-7B 翻译(~0.4s) ─► CosyVoice2 合成朗读(~0.8s)
-```
-
-- 目标语言 B 键切换 英/日（NVS 记忆）；重力横屏翻转；TTS 语速 0.8、音量满格
-- iat 失败自动回退整段 HTTPS 识别（Qwen3-ASR）；TTS 失败降级为纯文字
-- 配置：`cp translator/secrets.example.h translator/secrets.h`，填 WiFi +
-  硅基流动 key + 讯飞三件套（iat），编译命令同下（目录换 translator）
-- 排障记录见 `translator/test_api.py` 与 `translator/test_xfyun.py`
-
-## 从源码构建
+## 🔧 从源码构建
 
 ```bash
 arduino-cli compile --fqbn \
   'esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi,FlashSize=8M,PartitionScheme=default_8MB' \
-  wifi_scanner
-
-arduino-cli upload -p /dev/cu.usbmodem1101 --fqbn \
+  <目录名>            # wifi_scanner / translator / level
+arduino-cli upload -p /dev/cu.usbmodemXXXX --fqbn \
   'esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi,FlashSize=8M,PartitionScheme=default_8MB' \
-  wifi_scanner
+  <目录名>
 ```
 
-依赖：esp32 core ≥3.x + M5Unified（板级自动识别 M5StickS3）。
+依赖：esp32 core ≥3.x + M5Unified（+ WebSockets/ArduinoJson/ESP8266Audio 仅翻译器）。
 
-串口监视：`screen /dev/cu.usbmodem1101 115200`（输出 `[scan]` / `[track]` 日志）
+## 📚 其他
 
-> ⚠️ **macOS 串口注意**：这台 Mac 打开串口瞬间会拉高 DTR/RTS，可能把 S3 踢进下载模式
-> （屏幕灭、串口只打印 "waiting for download"）。恢复方法：**拔插一次 USB** 即可正常开机。
-> 刷完机后也需要拔插一次 USB 才会启动新固件（S3 的 USB 下载模式只有断电能清）。
+- 出厂 UIFlow2 固件还原：`restore_stock.sh`（需自备份镜像，见脚本注释）
+- macOS 下 USB 串口会偶发把 S3 踢进下载模式 → 拔插一次 USB 即恢复
+- 排障工具：`tools/usbreset.c`
 
-### 还原出厂固件
-
-出厂固件（UIFlow2）完整备份：`/tmp/stick_s3/flash_full.bin`（8MB，建议转存到安全位置）。
-
-```bash
-./restore_stock.sh            # 默认 /dev/cu.usbmodem1101
-./restore_stock.sh /dev/cu.XX # 指定其他串口
-```
-
-## 相关资料
-
-- [chat-stick](https://github.com/steveruizok/chat-stick) — M5StickS3 原生 AI 语音对话棒（参考了它的按键/板级配置结论）
-- [M5Unified](https://github.com/m5stack/M5Unified) / [M5GFX](https://github.com/m5stack/M5GFX)
-- [M5Stack 官方文档](https://docs.m5stack.com)
+---
+Blog-style build notes (Chinese) live in each app's README. Made with an M5StickS3, an afternoon, and far too much debugging.

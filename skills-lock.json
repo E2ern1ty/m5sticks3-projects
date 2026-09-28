@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "yunqi-agent-attendance": {
+      "source": "QianWen-AI/apsara-conference-2026",
+      "sourceType": "github",
+      "skillPath": "yunqi-agent-attendance/SKILL.md",
+      "computedHash": "de707e83c4abd763410c72dcc80f1865f37d2519ac43359cc64cef1be0771a1d"
+    },
+    "yunqi-agent-discovery": {
+      "source": "QianWen-AI/apsara-conference-2026",
+      "sourceType": "github",
+      "skillPath": "yunqi-agent-discovery/SKILL.md",
+      "computedHash": "41c1f0a585003370a4bc15e93899c980d8740460e24f43bdf6866f08b0dcbccb"
+    }
+  }
+}
