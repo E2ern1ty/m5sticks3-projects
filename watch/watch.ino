@@ -67,11 +67,18 @@ void setup() {
   Serial.begin(115200);
   Serial.printf("\r\n=== Simple Watch ===\r\n");
 
-  M5.Lcd.setFont(&fonts::efontCN_12);
-  M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-  M5.Lcd.setCursor(70, 55);
-  M5.Lcd.print("对时中 ...");
-  syncTime(false);
+  // 唤醒且 RTC 时间仍有效（年份>=2025）：直接显示，后台再校时
+  struct tm t0;
+  bool hasTime = getLocalTime(&t0, 100) && (t0.tm_year + 1900) >= 2025;
+  if (hasTime) {
+    lastSyncMs = millis() - (6UL * 3600 * 1000 - 120000); // 2 分钟后静默校时
+  } else {
+    M5.Lcd.setFont(&fonts::efontCN_12);
+    M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+    M5.Lcd.setCursor(70, 55);
+    M5.Lcd.print("对时中 ...");
+    syncTime(false);
+  }
 }
 
 void loop() {
