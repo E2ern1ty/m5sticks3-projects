@@ -137,7 +137,7 @@ static void drawIdle() {
   }
   M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
   M5.Lcd.setCursor(10, 118);
-  M5.Lcd.print("按住A录音 B:上传 B长按:关机");
+  M5.Lcd.print("A:录音/停止 B:上传 B长按:关机");
 }
 
 static void drawRec(uint32_t now) {
@@ -161,7 +161,7 @@ static void drawRec(uint32_t now) {
   M5.Lcd.fillRect(10, 60, bw, 18, recLevel > 0.7f ? TFT_RED : TFT_GREEN);
   M5.Lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
   M5.Lcd.setCursor(10, 118);
-  M5.Lcd.print("松开A:停止并保存");
+  M5.Lcd.print("按A停止并保存");
 }
 
 static void drawMsg(const char *l1, const char *l2, uint16_t c) {
@@ -400,8 +400,8 @@ void loop() {
   if (!recActive && M5.BtnB.pressedFor(1200)) { goSleep(); return; }
 
   if (!recActive) {
-    // 按住 A 即录音，松开即停止（对讲机式）
-    if (M5.BtnA.isPressed()) {
+    // 单击 A 开始录音
+    if (M5.BtnA.wasClicked()) {
       if (remainSec() < 10) {
         drawMsg("空间不足", "B 键上传清空", TFT_RED);
         delay(1500);
@@ -417,13 +417,13 @@ void loop() {
     }
     if (now - lastActivityMs > AUTO_SLEEP_MS) { goSleep(); return; }
   } else {
-    // 录音中：松开 A 停止
-    if (!M5.BtnA.isPressed()) {
+    // 录音中：再单击 A 停止
+    if (M5.BtnA.wasClicked()) {
       stopRecording();
       lastActivityMs = now;
       if (recBytes < BYTES_PER_SEC) { // <1 秒视为误触，丢弃
         LittleFS.remove(recName);
-        drawMsg("太短，已丢弃", "按住A重新录", TFT_ORANGE);
+        drawMsg("太短，已丢弃", "按A重新录", TFT_ORANGE);
         delay(1200);
       } else {
 #ifdef SECRETS_MISSING
