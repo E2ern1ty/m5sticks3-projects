@@ -74,16 +74,8 @@ static float targetRssiEma = -100.0f;
 static bool targetLost = false;
 static int trackMiss = 0;
 static unsigned long lastFullScanMs = 0;
-static bool navOn = false;            // 追踪页内的罗盘叠加层
-static float navYaw = 0;              // 会话航向（度，相对起始朝向）
-static float gyroBias = 0;            // 静止时标定的零偏
-static float navSin = 0, navCos = 1;  // 方位投票的圆周矢量和
-static float navWeight = 0;           // 累计证据权重
-static float navHeadAccum = 0, navHeadTime = 0; // 两次扫描间的移动航向积分
-static int navPrevRssi = -200;
-static uint32_t navLastSampleMs = 0;
-static constexpr float NAV_SIGN = 1.0f; // 箭头方向反了就改成 -1
 
+static bool navOn = false; // 3D 导航罗盘开关（追踪页）
 static int trend[TREND_N];
 static int trendLen = 0;
 static unsigned long trendHead = 0;
@@ -462,106 +454,194 @@ static void drawTrackLive() {
 }
 
 
-// ---------- 导航罗盘：陀螺仪航向 + 信号梯度推算 AP 大致方位 ----------
-// 原理：全向天线测不了方向，但"朝某方向走时信号变强"意味着那个方向
-// 朝向 AP。多段行走的加权圆周投票收敛出方位估计。
-// 注意：必须边走边测；原地旋转无效。
+// ---------- 3D 导航罗盘：四元数全姿态 + 信号梯度三维方位推算 ----------
+// 用法：长按 A 开罗盘（先静止 1s 标定），然后像拿遥控器一样把设备
+// "指向"你要走的方向并走两三步，换方向重复。AP 方位按 3D 矢量投票
+// 收敛，屏幕显示：水平方位罗盘（0°=正前）+ 仰角梯（楼上/楼下）。
+// navOn 在文件前部全局区声明
+static float qW = 1, qX = 0, qY = 0, qZ = 0;     // 姿态四元数（设备->世界）
+static float upWx = 0, upWy = 0, upWz = 1;       // 世界"上"方向（开局标定）
+static float gyroBx = 0, gyroBy = 0, gyroBz = 0; // 陀螺零偏
+static float vSumX = 0, vSumY = 0, vSumZ = 0;    // 3D 方位投票矢量和
+static float navWeight = 0;                      // 累计证据权重
+static float aimAccX = 0, aimAccY = 0, aimAccZ = 0, aimTime = 0; // 走动期间的指向积分
+static int navPrevRssi = -200;
+static uint32_t navLastMs = 0;
+static float navAccEma = 1.0f;                   // |a| 平滑（走动检测）
 
 static void navReset() {
-  navYaw = 0; navSin = 0; navCos = 1; navWeight = 0;
-  navHeadAccum = 0; navHeadTime = 0; navPrevRssi = -200;
+  vSumX = vSumY = vSumZ = 0; navWeight = 0;
+  aimAccX = aimAccY = aimAccZ = aimTime = 0;
+  navPrevRssi = -200;
 }
 
-// 静止 1 秒标定陀螺零偏（进入罗盘模式时调用）
+// 归一化
+static void normQ() {
+  float n = sqrtf(qW*qW + qX*qX + qY*qY + qZ*qZ);
+  qW/=n; qX/=n; qY/=n; qZ/=n;
+}
+
+// 设备轴 -> 世界（旋转矩阵作用）
+static void devToWorld(float dx, float dy, float dz, float *wx, float *wy, float *wz) {
+  // R = 由四元数构造（行向量形式）
+  *wx = (1-2*(qY*qY+qZ*qZ))*dx + 2*(qX*qY-qW*qZ)*dy + 2*(qX*qZ+qW*qY)*dz;
+  *wy = 2*(qX*qY+qW*qZ)*dx + (1-2*(qX*qX+qZ*qZ))*dy + 2*(qY*qZ-qW*qX)*dz;
+  *wz = 2*(qX*qZ-qW*qY)*dx + 2*(qY*qZ+qW*qX)*dy + (1-2*(qX*qX+qY*qY))*dz;
+}
+
+// 开局：静止标定陀螺零偏 + 定义世界系（当前指向=X，当前上方=Z）
 static void navCalibGyro() {
-  float gx, gy, gz, s = 0;
+  float gx, gy, gz, ax, ay, az;
+  float sx = 0, sy = 0, sz = 0, sax = 0, say = 0, saz = 0;
+  int n = 0;
   for (int i = 0; i < 50; i++) {
-    if (M5.Imu.getGyro(&gx, &gy, &gz)) s += gz; // 平持时偏航≈gz
-    delay(20);
+    if (M5.Imu.getGyro(&gx, &gy, &gz)) { sx += gx; sy += gy; sz += gz; }
+    if (M5.Imu.getAccel(&ax, &ay, &az)) { sax += ax; say += ay; saz += az; }
+    n++; delay(20);
   }
-  gyroBias = s / 50.0f;
-  Serial.printf("[nav] gyro bias %.2f deg/s\r\n", gyroBias);
+  gyroBx = sx/n; gyroBy = sy/n; gyroBz = sz/n;
+  // 世界上方向 = 当前加速度方向（静止时指向天）
+  float m = sqrtf(sax*sax + say*say + saz*saz) / n;
+  upWx = sax/n/m; upWy = say/n/m; upWz = saz/n/m;
+  qW = 1; qX = qY = qZ = 0; // 世界系=当前设备系，四元数从恒等开始
+  navAccEma = 1.0f;
+  Serial.printf("[nav] calib gyro=(%.1f,%.1f,%.1f) up=(%.2f,%.2f,%.2f)\r\n",
+                gyroBx, gyroBy, gyroBz, upWx, upWy, upWz);
 }
 
-// 每 20ms 调一次：积分航向 + 记录移动航向
+// 每 20ms：四元数积分 + 加计姿态修正 + 走动期间的指向累计
 static void navTick() {
   float gx, gy, gz, ax, ay, az;
   if (!M5.Imu.getGyro(&gx, &gy, &gz)) return;
   M5.Imu.getAccel(&ax, &ay, &az);
   uint32_t now = millis();
-  float dt = (navLastSampleMs == 0) ? 0 : (now - navLastSampleMs) / 1000.0f;
-  navLastSampleMs = now;
+  float dt = (navLastMs == 0) ? 0 : (now - navLastMs) / 1000.0f;
+  navLastMs = now;
   if (dt <= 0 || dt > 0.2f) return;
 
-  // 偏航轴 = 与重力最对齐的轴（平持为 z，竖持为 x），符号跟重力方向
-  float a[3] = {ax, ay, az};
-  float g[3] = {gx, gy, gz};
-  int k = 0;
-  for (int i = 1; i < 3; i++) if (fabsf(a[i]) > fabsf(a[k])) k = i;
-  float rate = (g[k] - gyroBias) * (a[k] > 0 ? 1 : -1);
-  navYaw = fmodf(navYaw + rate * dt + 3600.0f, 360.0f);
+  // 陀螺（deg/s -> rad/s，去零偏）
+  float wx = (gx - gyroBx) * 0.017453f;
+  float wy = (gy - gyroBy) * 0.017453f;
+  float wz = (gz - gyroBz) * 0.017453f;
 
-  // 走动检测：加速度抖动明显
-  float var = fabsf(ax) + fabsf(ay) + fabsf(az);
-  if (var > 1.25f) { // 在动（阈值为重力+抖动）
-    navHeadAccum += rate * dt; // 只累计"走动期间"的旋转
-    navHeadTime += dt;
+  // 加计修正：预测重力(世界 -up 在设备系) 与实测加速度的叉积误差
+  float am = sqrtf(ax*ax + ay*ay + az*az);
+  if (am > 0.5f && am < 1.5f) {
+    // 世界 -up 变换回设备系 = R^T * (-up)
+    // R^T 的行 = R 的列；直接用 devToWorld 的转置形式
+    float px = -( (1-2*(qY*qY+qZ*qZ))*upWx + 2*(qX*qY+qW*qZ)*upWy + 2*(qX*qZ-qW*qY)*upWz );
+    float py = -( 2*(qX*qY-qW*qZ)*upWx + (1-2*(qX*qX+qZ*qZ))*upWy + 2*(qY*qZ+qW*qX)*upWz );
+    float pz = -( 2*(qX*qZ+qW*qY)*upWx + 2*(qY*qZ-qW*qX)*upWy + (1-2*(qX*qX+qY*qY))*upWz );
+    float ex = (ay/am)*pz - (az/am)*py;
+    float ey = (az/am)*px - (ax/am)*pz;
+    float ez = (ax/am)*py - (ay/am)*px;
+    float kp = 0.06f;
+    wx += kp * ex; wy += kp * ey; wz += kp * ez;
+  }
+
+  // 四元数积分 q += 0.5 * q ⊗ (0,wx,wy,wz) * dt
+  float dw = 0.5f * (-qX*wx - qY*wy - qZ*wz) * dt;
+  float dx = 0.5f * ( qW*wx + qY*wz - qZ*wy) * dt;
+  float dy = 0.5f * ( qW*wy - qX*wz + qZ*wx) * dt;
+  float dz = 0.5f * ( qW*wz + qX*wy - qY*wx) * dt;
+  qW += dw; qX += dx; qY += dy; qZ += dz;
+  normQ();
+
+  // 走动检测：|a| 偏离 1g（平滑）
+  navAccEma += 0.1f * (am - navAccEma);
+  if (fabsf(navAccEma - 1.0f) > 0.06f) {
+    // 走动中：累计当前指向（设备长轴 X 的世界方向）
+    float axw, ayw, azw;
+    devToWorld(1, 0, 0, &axw, &ayw, &azw);
+    aimAccX += axw * dt; aimAccY += ayw * dt; aimAccZ += azw * dt;
+    aimTime += dt;
   }
 }
 
-// 每次快扫出结果时调用：梯度投票
+// 每次快扫出结果：3D 梯度投票
 static void navVote(int rssi) {
   if (navPrevRssi < -100) { navPrevRssi = rssi; return; }
   float d = rssi - navPrevRssi;
   navPrevRssi = rssi;
-  if (fabsf(d) < 2.0f) return;       // 无显著变化不投票
-  if (navHeadTime < 0.4f) return;    // 期间基本没走动，不可信
-  float head = navYaw - navHeadAccum + navHeadAccum * 0.5f; // 近似取中段航向
+  if (fabsf(d) < 2.0f) return;
+  if (aimTime < 0.4f) return; // 期间基本没走动
+  float m = sqrtf(aimAccX*aimAccX + aimAccY*aimAccY + aimAccZ*aimAccZ);
+  if (m < 1e-4f) return;
   float w = fabsf(d) > 10 ? 10 : fabsf(d);
-  float voteDir = (d > 0) ? head : head + 180.0f; // 变强=朝AP；变弱=反向
-  navSin += sinf(voteDir * 0.017453f) * w;
-  navCos += cosf(voteDir * 0.017453f) * w;
+  float s = (d > 0 ? 1.0f : -1.0f) * w / m; // 变强=沿走向；变弱=反向
+  vSumX += aimAccX * s; vSumY += aimAccY * s; vSumZ += aimAccZ * s;
   navWeight += w;
-  navHeadAccum = 0; navHeadTime = 0;
-  Serial.printf("[nav] d=%.0f head=%.0f w=%.0f total=%.0f\r\n",
-                d, head, w, navWeight);
+  aimAccX = aimAccY = aimAccZ = aimTime = 0;
+  Serial.printf("[nav] d=%.0f w=%.0f total=%.0f v=(%.2f,%.2f,%.2f)\r\n",
+                d, w, navWeight, vSumX, vSumY, vSumZ);
 }
 
-// 画罗盘叠加层（追踪页右侧/中央）
+// 屏幕：水平方位罗盘 + 仰角梯
 static void drawNav() {
-  // 半透明底：直接黑块盖掉右半趋势图区域
   M5.Lcd.fillRect(0, 62, SCREEN_W, 57, TFT_BLACK);
-  int cx = SCREEN_W / 2, cy = 92, r = 26;
+  int cy = 92;
+  // 左侧：水平方位环（0°=正前）
+  int cx = 58, r = 24;
   M5.Lcd.drawCircle(cx, cy, r, TFT_DARKGREY);
-  M5.Lcd.drawCircle(cx, cy, 3, TFT_DARKGREY);
-  // 方位箭头（相对当前朝向旋转）
+  M5.Lcd.drawFastHLine(cx - 4, cy, 8, TFT_DARKGREY); // 正前刻度
   float conf = navWeight > 30 ? 1.0f : navWeight / 30.0f;
   if (navWeight > 3) {
-    float bearing = atan2f(navSin, navCos) * 57.29578f;
-    float rel = (bearing - navYaw) * NAV_SIGN * 0.017453f;
-    float dx = sinf(rel), dy = -cosf(rel);
-    uint16_t col = conf > 0.7f ? TFT_GREEN : TFT_CYAN;
-    M5.Lcd.drawLine(cx - dx * r * 0.7f, cy - dy * r * 0.7f,
-                    cx + dx * r * 0.9f, cy + dy * r * 0.9f, col);
-    // 箭头尖
-    M5.Lcd.fillTriangle(cx + dx * r * 0.95f, cy + dy * r * 0.95f,
-                        cx + dx * r * 0.55f - dy * r * 0.22f,
-                        cy + dy * r * 0.55f + dx * r * 0.22f,
-                        cx + dx * r * 0.55f + dy * r * 0.22f,
-                        cy + dy * r * 0.55f - dx * r * 0.22f, col);
+    float m = sqrtf(vSumX*vSumX + vSumY*vSumY + vSumZ*vSumZ);
+    float dX = vSumX/m, dY = vSumY/m, dZ = vSumZ/m;
+    // 当前指向的水平投影与 AP 方向水平投影的夹角（绕世界 up）
+    float axw, ayw, azw;
+    devToWorld(1, 0, 0, &axw, &ayw, &azw); // 当前 aim
+    // 水平化
+    float ad = axw*upWx + ayw*upWy + azw*upWz;
+    float ahx = axw - ad*upWx, ahy = ayw - ad*upWy, ahz = azw - ad*upWz;
+    float bd = dX*upWx + dY*upWy + dZ*upWz;
+    float bhx = dX - bd*upWx, bhy = dY - bd*upWy, bhz = dZ - bd*upWz;
+    float ahm = sqrtf(ahx*ahx + ahy*ahy + ahz*ahz);
+    float bhm = sqrtf(bhx*bhx + bhy*bhy + bhz*bhz);
+    if (ahm > 1e-3f && bhm > 1e-3f) {
+      float cosA = (ahx*bhx + ahy*bhy + ahz*bhz) / (ahm * bhm);
+      float sinA = ( (ahy*bhz - ahz*bhy)*upWx + (ahz*bhx - ahx*bhz)*upWy
+                   + (ahx*bhy - ahy*bhx)*upWz ) / (ahm * bhm);
+      float yawErr = atan2f(sinA, cosA); // 正=右转
+      uint16_t col = conf > 0.7f ? TFT_GREEN : TFT_CYAN;
+      float px = sinf(yawErr), py = -cosf(yawErr); // 0=上(正前)
+      M5.Lcd.drawLine(cx - px*r*0.5f, cy - py*r*0.5f,
+                      cx + px*r*0.9f, cy + py*r*0.9f, col);
+      M5.Lcd.fillTriangle(cx + px*r*0.95f, cy + py*r*0.95f,
+                          cx + px*r*0.55f - py*r*0.2f, cy + py*r*0.55f + px*r*0.2f,
+                          cx + px*r*0.55f + py*r*0.2f, cy + py*r*0.55f - px*r*0.2f, col);
+      // 环下方的角度文字
+      M5.Lcd.setTextFont(1);
+      M5.Lcd.setTextColor(col, TFT_BLACK);
+      M5.Lcd.setCursor(cx - 18, cy + r + 4);
+      int deg = (int)(yawErr * 57.29578f);
+      M5.Lcd.printf("%+d\xE7", deg);
+    }
+    // 右侧：仰角梯（AP 在楼上/楼下）
+    float elev = asinf(fmaxf(-1.0f, fminf(1.0f, bd))) * 57.29578f;
+    int ex = 150;
+    M5.Lcd.drawFastVLine(ex, cy - 22, 44, TFT_DARKGREY);
+    M5.Lcd.drawFastHLine(ex - 4, cy, 8, TFT_DARKGREY); // 0°
+    int ey = cy - (int)(elev / 45.0f * 22.0f);
+    uint16_t ecol = conf > 0.7f ? TFT_GREEN : TFT_CYAN;
+    M5.Lcd.fillCircle(ex, ey, 4, ecol);
+    M5.Lcd.setTextFont(1);
+    M5.Lcd.setTextColor(ecol, TFT_BLACK);
+    M5.Lcd.setCursor(ex + 10, ey - 3);
+    M5.Lcd.printf("%+.0f\xE7", elev);
+    M5.Lcd.setCursor(ex + 10, cy + 10);
+    if (elev > 12) M5.Lcd.print("^楼上方向");
+    else if (elev < -12) M5.Lcd.print("v楼下方向");
+    else M5.Lcd.print("同层");
   } else {
     M5.Lcd.setFont(&fonts::efontCN_12);
     M5.Lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    M5.Lcd.setCursor(cx - 60, cy - 8);
-    M5.Lcd.print("走动几步采集方位");
+    M5.Lcd.setCursor(40, cy - 8);
+    M5.Lcd.print("指向前进方向走几步");
   }
   // 置信度条
   M5.Lcd.fillRect(4, 118, (int)(conf * 100), 4, conf > 0.7f ? TFT_GREEN : TFT_CYAN);
   M5.Lcd.drawRect(4, 118, 100, 4, TFT_DARKGREY);
-  M5.Lcd.setTextFont(1);
-  M5.Lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  M5.Lcd.setCursor(140, 122);
-  M5.Lcd.print(navOn ? "B-long:reset A-long:off" : "");
 }
 
 static void geigerBeep() {
