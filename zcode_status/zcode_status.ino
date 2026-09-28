@@ -34,6 +34,8 @@ static String stCurrent = "";
 static String stState = "boot"; // running/idle/error/none/boot/conn
 static uint32_t stAgo = 0;
 static uint64_t tokAll = 0, tokCache = 0, tokDayOut = 0;
+static int planWin = 0, planQuota = 600;
+static uint64_t tokMonth = 0;
 static bool blinkOn = true;
 
 static int brightIdx = 0;
@@ -100,6 +102,9 @@ static void poll() {
   tokAll = strtoull(String(doc["all_total"] | "0").c_str(), nullptr, 10);
   tokCache = strtoull(String(doc["cache"] | "0").c_str(), nullptr, 10);
   tokDayOut = strtoull(String(doc["day_out"] | "0").c_str(), nullptr, 10);
+  planWin = doc["plan_win"] | 0;
+  planQuota = doc["plan_quota"] | 600;
+  tokMonth = strtoull(String(doc["month_total"] | "0").c_str(), nullptr, 10);
 }
 
 static void draw() {
@@ -151,15 +156,24 @@ static void draw() {
   drawWrapped(stCurrent.isEmpty() ? "（无待办）" : stCurrent.c_str(),
               6, 76, 228, 1, TFT_LIGHTGREY, 15, &fonts::efontCN_12);
 
-  // ---- Token 消耗 ----
+  // ---- Token 消耗 + plan 使用程度 ----
   M5.Lcd.setTextFont(1);
   M5.Lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  M5.Lcd.setCursor(6, 100);
-  M5.Lcd.printf("Tokens  total %s  cache %s",
-                fmtTok(tokAll).c_str(), fmtTok(tokCache).c_str());
-  M5.Lcd.setCursor(6, 112);
-  M5.Lcd.printf("today out %s   project %s",
-                fmtTok(tokDayOut).c_str(), stProject.c_str());
+  M5.Lcd.setCursor(6, 96);
+  M5.Lcd.printf("month %s  cache %s  out %s",
+                fmtTok(tokMonth).c_str(), fmtTok(tokCache).c_str(),
+                fmtTok(tokDayOut).c_str());
+  // plan 5h 窗口
+  int pct = planQuota > 0 ? planWin * 100 / planQuota : 0;
+  uint16_t pc = pct >= 90 ? TFT_RED : pct >= 70 ? TFT_ORANGE : TFT_GREEN;
+  M5.Lcd.setCursor(6, 108);
+  M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Lcd.printf("PLAN5h %d/%d", planWin, planQuota);
+  M5.Lcd.fillRect(92, 109, 100, 7, TFT_DARKGREY);
+  M5.Lcd.fillRect(92, 109, min(100, pct), 7, pc);
+  M5.Lcd.setCursor(196, 108);
+  M5.Lcd.setTextColor(pc, TFT_BLACK);
+  M5.Lcd.printf("%d%%", pct);
 
   // ---- 底部提示 ----
   M5.Lcd.setCursor(6, 126);

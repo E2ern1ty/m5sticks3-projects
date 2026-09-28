@@ -69,8 +69,11 @@ def read_status():
     return out
 
 
+PLAN_QUOTA = {"prompts_5h": 120}  # --plan-prompts 可改
+
 def read_tokens():
-    """全部会话累计 + 最近 24h 输出"""
+    """全部累计 + 24h 输出 + plan 窗口次数 + 本月 token"""
+    now_ms = int(time.time() * 1000)
     try:
         db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=2)
         row = db.execute(
@@ -79,12 +82,27 @@ def read_tokens():
             "COALESCE(SUM(cache_read_input_tokens),0) FROM turn_usage").fetchone()
         day = db.execute(
             "SELECT COALESCE(SUM(output_tokens),0) FROM turn_usage "
-            "WHERE started_at > ?", (int(time.time() * 1000) - 86400000,)).fetchone()
+            "WHERE started_at > ?", (now_ms - 86400000,)).fetchone()
+        # plan 5 小时窗口内的 prompt 次数（去重 logical_request_id）
+        win = db.execute(
+            "SELECT COUNT(DISTINCT logical_request_id) FROM model_usage "
+            "WHERE provider_id LIKE '%coding-plan%' AND started_at > ?",
+            (now_ms - 5 * 3600 * 1000,)).fetchone()[0]
+        # 本月（自然月）token 总量
+        month_start = time.strftime("%Y-%m-01")
+        ms0 = int(time.mktime(time.strptime(month_start, "%Y-%m-%d")) * 1000)
+        month = db.execute(
+            "SELECT COALESCE(SUM(computed_total_tokens),0) FROM turn_usage "
+            "WHERE started_at >= ?", (ms0,)).fetchone()[0]
         db.close()
         return {"all_total": row[0], "all_out": row[1],
-                "cache": row[2], "day_out": day[0]}
+                "cache": row[2], "day_out": day[0],
+                "plan_win": win, "plan_quota": PLAN_QUOTA["prompts_5h"],
+                "month_total": month}
     except sqlite3.Error:
-        return {"all_total": 0, "all_out": 0, "cache": 0, "day_out": 0}
+        return {"all_total": 0, "all_out": 0, "cache": 0, "day_out": 0,
+                "plan_win": 0, "plan_quota": PLAN_QUOTA["prompts_5h"],
+                "month_total": 0}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -109,7 +127,10 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--plan-prompts", type=int, default=120,
+                    help="plan 每5小时窗口的 prompt 额度（默认120）")
     args = ap.parse_args()
+    PLAN_QUOTA["prompts_5h"] = args.plan_prompts
     import socket
     try:
         ip = socket.gethostbyname(socket.gethostname())
