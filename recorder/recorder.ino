@@ -417,8 +417,8 @@ void loop() {
     }
     if (now - lastActivityMs > AUTO_SLEEP_MS) { goSleep(); return; }
   } else {
-    // 录音中：再单击 A 停止
-    if (M5.BtnA.wasClicked()) {
+    // 录音中：再单击 A 停止（起步 1.5s 保护期，吞掉开始键的残留事件）
+    if (M5.BtnA.wasClicked() && millis() - recStartMs > 1500) {
       stopRecording();
       lastActivityMs = now;
       if (recBytes < BYTES_PER_SEC) { // <1 秒视为误触，丢弃
