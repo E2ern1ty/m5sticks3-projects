@@ -81,6 +81,20 @@ void loop() {
     brightIdx = (brightIdx + 1) % 3;
     M5.Lcd.setBrightness(BRIGHTS[brightIdx]);
   }
+  // B 长按：休眠（RTC 继续走时，唤醒即恢复）
+  if (M5.BtnB.pressedFor(1200)) {
+    M5.Lcd.fillScreen(TFT_BLACK);
+    M5.Lcd.setFont(&fonts::efontCN_12);
+    M5.Lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    M5.Lcd.setCursor(96, 60);
+    M5.Lcd.print("休眠");
+    delay(400);
+    M5.Lcd.sleep();
+    esp_sleep_enable_ext1_wakeup((1ULL << 11) | (1ULL << 12),
+                                 ESP_EXT1_WAKEUP_ANY_LOW);
+    M5.Power.deepSleep(m5::Power_Class::sleep_no_timer);
+    return;
+  }
   if (M5.BtnB.wasClicked()) {
     M5.Lcd.setFont(&fonts::efontCN_12);
     M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
@@ -91,6 +105,7 @@ void loop() {
   }
 
   if (millis() - lastDrawMs > 250) {
+    lastDrawMs = millis() - 249; // 立即触发
     lastDrawMs = millis();
     struct tm t;
     if (!getLocalTime(&t, 50)) {
