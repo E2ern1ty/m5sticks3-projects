@@ -91,6 +91,9 @@ void loop() {
     M5.Lcd.print("休眠");
     delay(400);
     M5.Lcd.sleep();
+    // PM1 的 gpio2 控制屏幕电源：必须断掉，否则背光长明
+    M5.Power.M5pm1.setGPIOOutput(M5PM1_Class::gpio2, false);
+    delay(50);
     esp_sleep_enable_ext1_wakeup((1ULL << 11) | (1ULL << 12),
                                  ESP_EXT1_WAKEUP_ANY_LOW);
     M5.Power.deepSleep(m5::Power_Class::sleep_no_timer);
