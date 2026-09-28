@@ -67,18 +67,12 @@ void setup() {
   Serial.begin(115200);
   Serial.printf("\r\n=== Simple Watch ===\r\n");
 
-  // 唤醒且 RTC 时间仍有效（年份>=2025）：直接显示，后台再校时
-  struct tm t0;
-  bool hasTime = getLocalTime(&t0, 100) && (t0.tm_year + 1900) >= 2025;
-  if (hasTime) {
-    lastSyncMs = millis() - (6UL * 3600 * 1000 - 120000); // 2 分钟后静默校时
-  } else {
-    M5.Lcd.setFont(&fonts::efontCN_12);
-    M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-    M5.Lcd.setCursor(70, 55);
-    M5.Lcd.print("对时中 ...");
-    syncTime(false);
-  }
+  // PM1 深度睡眠后 RTC 不保留时间：每次开机都重新对时
+  M5.Lcd.setFont(&fonts::efontCN_12);
+  M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
+  M5.Lcd.setCursor(70, 55);
+  M5.Lcd.print("对时中 ...");
+  syncTime(false);
 }
 
 void loop() {
@@ -161,8 +155,11 @@ void loop() {
     }
   }
 
-  // 每 6 小时自动静默校时
-  if (millis() - lastSyncMs > 6UL * 3600 * 1000) syncTime(false);
+  // 自动校时：成功后 30 分钟一次；失败则 5 分钟后重试
+  {
+    uint32_t interval = wifiOk ? 30UL * 60 * 1000 : 5UL * 60 * 1000;
+    if (millis() - lastSyncMs > interval) syncTime(false);
+  }
 
   delay(20);
 }
