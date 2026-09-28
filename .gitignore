@@ -12,3 +12,4 @@ wifi_scanner/build-*/
 # 翻译器密钥（绝不提交）
 translator/secrets.h
 watch/secrets.h
+zcode_status/secrets.h
